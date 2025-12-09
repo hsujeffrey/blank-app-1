@@ -1,389 +1,249 @@
-import React, { useState } from 'react';
-import { Upload, Plus, Trash2, Download, AlertCircle } from 'lucide-react';
+import streamlit as st
+import pandas as pd
+import io
 
-export default function MarketingClassifier() {
-  const [file, setFile] = useState(null);
-  const [data, setData] = useState([]);
-  const [results, setResults] = useState(null);
-  const [dictionaries, setDictionaries] = useState({
-    urgency_marketing: [
-      'limited', 'limited time', 'limited run', 'limited edition', 'order now',
-      'last chance', 'hurry', 'while supplies last', "before they're gone",
-      'selling out', 'selling fast', 'act now', "don't wait", 'today only',
-      'expires soon', 'final hours', 'almost gone'
-    ],
-    exclusive_marketing: [
-      'exclusive', 'exclusively', 'exclusive offer', 'exclusive deal',
-      'members only', 'vip', 'special access', 'invitation only',
-      'premium', 'privileged', 'limited access', 'select customers',
-      'insider', 'private sale', 'early access'
-    ]
-  });
-  const [newTactic, setNewTactic] = useState('');
-  const [newKeyword, setNewKeyword] = useState({});
+# Page configuration
+st.set_page_config(
+    page_title="Marketing Tactic Classifier",
+    page_icon="📊",
+    layout="wide"
+)
 
-  const parseCSV = (text) => {
-    const lines = text.split('\n').filter(line => line.trim());
-    if (lines.length === 0) return [];
-    
-    const headers = lines[0].split(',').map(h => h.trim());
-    const rows = [];
-    
-    for (let i = 1; i < lines.length; i++) {
-      const values = lines[i].split(',').map(v => v.trim());
-      const row = {};
-      headers.forEach((header, idx) => {
-        row[header] = values[idx] || '';
-      });
-      rows.push(row);
+# Initialize session state
+if 'dictionaries' not in st.session_state:
+    st.session_state.dictionaries = {
+        'urgency_marketing': [
+            'limited', 'limited time', 'limited run', 'limited edition', 'order now',
+            'last chance', 'hurry', 'while supplies last', 'before they are gone',
+            'selling out', 'selling fast', 'act now', 'do not wait', 'today only',
+            'expires soon', 'final hours', 'almost gone'
+        ],
+        'exclusive_marketing': [
+            'exclusive', 'exclusively', 'exclusive offer', 'exclusive deal',
+            'members only', 'vip', 'special access', 'invitation only',
+            'premium', 'privileged', 'limited access', 'select customers',
+            'insider', 'private sale', 'early access'
+        ]
     }
+
+if 'results_df' not in st.session_state:
+    st.session_state.results_df = None
+
+def classify_statement(text, dictionaries):
+    """Classify a statement based on marketing tactic dictionaries."""
+    if pd.isna(text):
+        return {}
     
-    return rows;
-  };
-
-  const handleFileUpload = (event) => {
-    const uploadedFile = event.target.files[0];
-    if (uploadedFile) {
-      setFile(uploadedFile);
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const text = e.target.result;
-        const parsed = parseCSV(text);
-        setData(parsed);
-        setResults(null);
-      };
-      reader.readAsText(uploadedFile);
-    }
-  };
-
-  const classifyStatement = (text, dicts) => {
-    if (!text) return {};
+    text_lower = str(text).lower()
+    results = {}
     
-    const textLower = text.toLowerCase();
-    const results = {};
+    for tactic, keywords in dictionaries.items():
+        matches = []
+        for keyword in keywords:
+            if keyword.lower() in text_lower:
+                matches.append(keyword)
+        
+        results[tactic] = {
+            'present': len(matches) > 0,
+            'count': len(matches),
+            'matches': matches
+        }
     
-    Object.entries(dicts).forEach(([tactic, keywords]) => {
-      const matches = keywords.filter(keyword => 
-        textLower.includes(keyword.toLowerCase())
-      );
-      
-      results[tactic] = {
-        present: matches.length > 0,
-        count: matches.length,
-        matches: matches
-      };
-    });
+    return results
+
+def process_dataframe(df, dictionaries):
+    """Process the dataframe and add classification columns."""
+    # Find the statement column
+    statement_col = None
+    for col in df.columns:
+        if col.lower() in ['statement', 'text', 'content']:
+            statement_col = col
+            break
     
-    return results;
-  };
-
-  const runClassification = () => {
-    if (data.length === 0) return;
+    if statement_col is None:
+        statement_col = df.columns[1] if len(df.columns) > 1 else df.columns[0]
     
-    const statementColumn = data[0].Statement !== undefined ? 'Statement' : 
-                           data[0].statement !== undefined ? 'statement' :
-                           Object.keys(data[0])[1]; // Fallback to second column
+    # Apply classification
+    df['classification'] = df[statement_col].apply(lambda x: classify_statement(x, dictionaries))
     
-    const classified = data.map(row => {
-      const classification = classifyStatement(row[statementColumn], dictionaries);
-      return {
-        ...row,
-        classification
-      };
-    });
+    # Extract results to separate columns
+    for tactic in dictionaries.keys():
+        df[f'{tactic}_present'] = df['classification'].apply(lambda x: x.get(tactic, {}).get('present', False))
+        df[f'{tactic}_count'] = df['classification'].apply(lambda x: x.get(tactic, {}).get('count', 0))
+        df[f'{tactic}_matches'] = df['classification'].apply(lambda x: ', '.join(x.get(tactic, {}).get('matches', [])))
     
-    setResults(classified);
-  };
+    return df, statement_col
 
-  const addTactic = () => {
-    if (newTactic && !dictionaries[newTactic]) {
-      setDictionaries({
-        ...dictionaries,
-        [newTactic]: []
-      });
-      setNewTactic('');
-    }
-  };
+# Title and description
+st.title("📊 Marketing Tactic Classifier")
+st.markdown("Upload your dataset and classify statements using customizable marketing tactic dictionaries")
 
-  const removeTactic = (tactic) => {
-    const updated = { ...dictionaries };
-    delete updated[tactic];
-    setDictionaries(updated);
-  };
+# Create two columns for layout
+col1, col2 = st.columns([1, 1])
 
-  const addKeyword = (tactic) => {
-    const keyword = newKeyword[tactic];
-    if (keyword && keyword.trim()) {
-      setDictionaries({
-        ...dictionaries,
-        [tactic]: [...dictionaries[tactic], keyword.trim()]
-      });
-      setNewKeyword({ ...newKeyword, [tactic]: '' });
-    }
-  };
-
-  const removeKeyword = (tactic, keyword) => {
-    setDictionaries({
-      ...dictionaries,
-      [tactic]: dictionaries[tactic].filter(k => k !== keyword)
-    });
-  };
-
-  const downloadResults = () => {
-    if (!results) return;
+with col1:
+    st.header("📁 Upload Dataset")
+    uploaded_file = st.file_uploader("Choose a CSV file", type=['csv'])
     
-    const statementColumn = results[0].Statement !== undefined ? 'Statement' : 
-                           results[0].statement !== undefined ? 'statement' :
-                           Object.keys(results[0])[1];
+    if uploaded_file is not None:
+        try:
+            df = pd.read_csv(uploaded_file)
+            st.success(f"Loaded {len(df)} rows")
+            st.session_state.uploaded_df = df
+        except Exception as e:
+            st.error(f"Error loading file: {str(e)}")
+
+with col2:
+    st.header("⚙️ Actions")
     
-    const headers = ['ID', statementColumn];
-    Object.keys(dictionaries).forEach(tactic => {
-      headers.push(`${tactic}_present`, `${tactic}_count`, `${tactic}_matches`);
-    });
+    if st.button("🔍 Run Classification", use_container_width=True, type="primary"):
+        if 'uploaded_df' in st.session_state:
+            with st.spinner("Classifying statements..."):
+                result_df, statement_col = process_dataframe(
+                    st.session_state.uploaded_df.copy(),
+                    st.session_state.dictionaries
+                )
+                st.session_state.results_df = result_df
+                st.session_state.statement_col = statement_col
+                st.success("Classification complete!")
+        else:
+            st.warning("Please upload a dataset first")
     
-    const rows = results.map(row => {
-      const values = [row.ID || row.id || '', row[statementColumn]];
-      Object.keys(dictionaries).forEach(tactic => {
-        const cls = row.classification[tactic] || {};
-        values.push(
-          cls.present ? 'TRUE' : 'FALSE',
-          cls.count || 0,
-          (cls.matches || []).join('; ')
-        );
-      });
-      return values.map(v => `"${v}"`).join(',');
-    });
+    if st.session_state.results_df is not None:
+        # Convert results to CSV
+        csv_buffer = io.StringIO()
+        st.session_state.results_df.to_csv(csv_buffer, index=False)
+        csv_data = csv_buffer.getvalue()
+        
+        st.download_button(
+            label="📥 Download Results",
+            data=csv_data,
+            file_name="classified_data.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
+
+# Dictionary Management
+st.header("📚 Marketing Tactic Dictionaries")
+
+# Add new tactic
+with st.expander("➕ Add New Tactic Category"):
+    new_tactic = st.text_input("Tactic name (e.g., scarcity_marketing)")
+    if st.button("Add Tactic"):
+        if new_tactic and new_tactic not in st.session_state.dictionaries:
+            st.session_state.dictionaries[new_tactic] = []
+            st.success(f"Added tactic: {new_tactic}")
+            st.rerun()
+        elif new_tactic in st.session_state.dictionaries:
+            st.warning("This tactic already exists")
+        else:
+            st.warning("Please enter a tactic name")
+
+# Manage existing tactics
+for tactic in list(st.session_state.dictionaries.keys()):
+    with st.expander(f"📝 {tactic} ({len(st.session_state.dictionaries[tactic])} keywords)"):
+        
+        # Add keyword
+        col_input, col_add = st.columns([4, 1])
+        with col_input:
+            new_keyword = st.text_input(
+                f"Add keyword to {tactic}",
+                key=f"keyword_{tactic}",
+                label_visibility="collapsed",
+                placeholder="Enter keyword..."
+            )
+        with col_add:
+            if st.button("Add", key=f"add_{tactic}"):
+                if new_keyword and new_keyword not in st.session_state.dictionaries[tactic]:
+                    st.session_state.dictionaries[tactic].append(new_keyword)
+                    st.rerun()
+        
+        # Display keywords
+        keywords = st.session_state.dictionaries[tactic]
+        if keywords:
+            for i, keyword in enumerate(keywords):
+                col_kw, col_del = st.columns([5, 1])
+                with col_kw:
+                    st.text(keyword)
+                with col_del:
+                    if st.button("🗑️", key=f"del_{tactic}_{i}"):
+                        st.session_state.dictionaries[tactic].remove(keyword)
+                        st.rerun()
+        
+        # Remove tactic button
+        st.divider()
+        if st.button(f"🗑️ Remove {tactic}", key=f"remove_tactic_{tactic}", type="secondary"):
+            del st.session_state.dictionaries[tactic]
+            st.rerun()
+
+# Display Results
+if st.session_state.results_df is not None:
+    st.header("📊 Classification Results")
     
-    const csv = [headers.join(','), ...rows].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'classified_data.csv';
-    a.click();
-  };
-
-  const getStatementColumn = () => {
-    if (data.length === 0) return 'Statement';
-    return data[0].Statement !== undefined ? 'Statement' : 
-           data[0].statement !== undefined ? 'statement' :
-           Object.keys(data[0])[1];
-  };
-
-  const calculateStats = () => {
-    if (!results) return null;
+    # Summary Statistics
+    st.subheader("Summary Statistics")
     
-    const stats = {};
-    Object.keys(dictionaries).forEach(tactic => {
-      const count = results.filter(r => r.classification[tactic]?.present).length;
-      stats[tactic] = {
-        count,
-        percentage: ((count / results.length) * 100).toFixed(1)
-      };
-    });
+    col1, col2, col3 = st.columns(3)
     
-    const anyTactic = results.filter(r => 
-      Object.values(r.classification).some(c => c.present)
-    ).length;
+    total_statements = len(st.session_state.results_df)
+    any_tactic_cols = [col for col in st.session_state.results_df.columns if '_present' in col]
+    statements_with_tactics = st.session_state.results_df[any_tactic_cols].any(axis=1).sum()
     
-    return { tactics: stats, anyTactic, total: results.length };
-  };
-
-  const stats = calculateStats();
-
-  return (
-    <div className="min-h-screen bg-gray-50 p-6">
-      <div className="max-w-7xl mx-auto">
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">Marketing Tactic Classifier</h1>
-        <p className="text-gray-600 mb-8">Upload your dataset and classify statements using customizable marketing tactic dictionaries</p>
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-          {/* File Upload */}
-          <div className="bg-white rounded-lg shadow p-6">
-            <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
-              <Upload className="w-5 h-5" />
-              Upload Dataset
-            </h2>
-            <input
-              type="file"
-              accept=".csv"
-              onChange={handleFileUpload}
-              className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
-            />
-            {data.length > 0 && (
-              <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded-lg">
-                <p className="text-sm text-green-800">✓ Loaded {data.length} rows</p>
-              </div>
-            )}
-          </div>
-
-          {/* Actions */}
-          <div className="bg-white rounded-lg shadow p-6">
-            <h2 className="text-xl font-semibold mb-4">Actions</h2>
-            <div className="space-y-3">
-              <button
-                onClick={runClassification}
-                disabled={data.length === 0}
-                className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition"
-              >
-                Run Classification
-              </button>
-              <button
-                onClick={downloadResults}
-                disabled={!results}
-                className="w-full bg-green-600 text-white py-2 px-4 rounded-lg hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition flex items-center justify-center gap-2"
-              >
-                <Download className="w-4 h-4" />
-                Download Results
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* Dictionary Manager */}
-        <div className="bg-white rounded-lg shadow p-6 mb-6">
-          <h2 className="text-xl font-semibold mb-4">Marketing Tactic Dictionaries</h2>
-          
-          <div className="mb-4 flex gap-2">
-            <input
-              type="text"
-              value={newTactic}
-              onChange={(e) => setNewTactic(e.target.value)}
-              placeholder="New tactic name (e.g., scarcity_marketing)"
-              className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
-            <button
-              onClick={addTactic}
-              className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center gap-2"
-            >
-              <Plus className="w-4 h-4" />
-              Add Tactic
-            </button>
-          </div>
-
-          <div className="space-y-4">
-            {Object.entries(dictionaries).map(([tactic, keywords]) => (
-              <div key={tactic} className="border border-gray-200 rounded-lg p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="font-semibold text-lg">{tactic}</h3>
-                  <button
-                    onClick={() => removeTactic(tactic)}
-                    className="text-red-600 hover:text-red-700"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-                
-                <div className="flex gap-2 mb-3">
-                  <input
-                    type="text"
-                    value={newKeyword[tactic] || ''}
-                    onChange={(e) => setNewKeyword({ ...newKeyword, [tactic]: e.target.value })}
-                    placeholder="Add keyword..."
-                    className="flex-1 px-3 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
-                    onKeyPress={(e) => e.key === 'Enter' && addKeyword(tactic)}
-                  />
-                  <button
-                    onClick={() => addKeyword(tactic)}
-                    className="bg-gray-600 text-white px-3 py-1 rounded hover:bg-gray-700 text-sm"
-                  >
-                    Add
-                  </button>
-                </div>
-                
-                <div className="flex flex-wrap gap-2">
-                  {keywords.map(keyword => (
-                    <span
-                      key={keyword}
-                      className="bg-gray-100 px-3 py-1 rounded-full text-sm flex items-center gap-2"
-                    >
-                      {keyword}
-                      <button
-                        onClick={() => removeKeyword(tactic, keyword)}
-                        className="text-gray-500 hover:text-red-600"
-                      >
-                        ×
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Results */}
-        {stats && (
-          <div className="bg-white rounded-lg shadow p-6 mb-6">
-            <h2 className="text-xl font-semibold mb-4">Classification Summary</h2>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-              <div className="bg-blue-50 p-4 rounded-lg">
-                <p className="text-sm text-gray-600">Total Statements</p>
-                <p className="text-2xl font-bold text-blue-700">{stats.total}</p>
-              </div>
-              <div className="bg-green-50 p-4 rounded-lg">
-                <p className="text-sm text-gray-600">With Any Tactic</p>
-                <p className="text-2xl font-bold text-green-700">{stats.anyTactic}</p>
-              </div>
-              <div className="bg-purple-50 p-4 rounded-lg">
-                <p className="text-sm text-gray-600">Match Rate</p>
-                <p className="text-2xl font-bold text-purple-700">
-                  {((stats.anyTactic / stats.total) * 100).toFixed(1)}%
-                </p>
-              </div>
-            </div>
+    with col1:
+        st.metric("Total Statements", total_statements)
+    with col2:
+        st.metric("With Any Tactic", statements_with_tactics)
+    with col3:
+        match_rate = (statements_with_tactics / total_statements * 100) if total_statements > 0 else 0
+        st.metric("Match Rate", f"{match_rate:.1f}%")
+    
+    # Tactic breakdown
+    st.subheader("Tactic Breakdown")
+    for tactic in st.session_state.dictionaries.keys():
+        present_col = f'{tactic}_present'
+        if present_col in st.session_state.results_df.columns:
+            count = st.session_state.results_df[present_col].sum()
+            percentage = (count / total_statements * 100) if total_statements > 0 else 0
+            st.progress(percentage / 100, text=f"{tactic}: {count}/{total_statements} ({percentage:.1f}%)")
+    
+    # Detailed Results
+    st.subheader("Detailed Results")
+    
+    # Filter options
+    filter_option = st.selectbox(
+        "Filter results",
+        ["All statements", "Only statements with matches", "Only statements without matches"]
+    )
+    
+    filtered_df = st.session_state.results_df.copy()
+    if filter_option == "Only statements with matches":
+        filtered_df = filtered_df[filtered_df[any_tactic_cols].any(axis=1)]
+    elif filter_option == "Only statements without matches":
+        filtered_df = filtered_df[~filtered_df[any_tactic_cols].any(axis=1)]
+    
+    # Display results
+    for idx, row in filtered_df.iterrows():
+        statement_col = st.session_state.statement_col
+        has_match = any([row[col] for col in any_tactic_cols if col in row])
+        
+        # Color code based on matches
+        if has_match:
+            st.success(f"**ID:** {row.get('ID', row.get('id', idx))}  \n**Statement:** {row[statement_col]}")
+        else:
+            st.info(f"**ID:** {row.get('ID', row.get('id', idx))}  \n**Statement:** {row[statement_col]}")
+        
+        # Show classification results
+        for tactic in st.session_state.dictionaries.keys():
+            present_col = f'{tactic}_present'
+            matches_col = f'{tactic}_matches'
             
-            <div className="space-y-2">
-              {Object.entries(stats.tactics).map(([tactic, data]) => (
-                <div key={tactic} className="flex items-center justify-between p-3 bg-gray-50 rounded">
-                  <span className="font-medium">{tactic}</span>
-                  <span className="text-sm text-gray-600">
-                    {data.count}/{stats.total} ({data.percentage}%)
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+            if present_col in row and row[present_col]:
+                st.markdown(f"- ✅ **{tactic}**: {row[matches_col]}")
+            else:
+                st.markdown(f"- ❌ **{tactic}**: No matches")
+        
+        st.divider()
 
-        {results && (
-          <div className="bg-white rounded-lg shadow p-6">
-            <h2 className="text-xl font-semibold mb-4">Detailed Results</h2>
-            <div className="space-y-4 max-h-96 overflow-y-auto">
-              {results.map((row, idx) => {
-                const statementCol = getStatementColumn();
-                const hasMatch = Object.values(row.classification).some(c => c.present);
-                
-                return (
-                  <div key={idx} className={`border rounded-lg p-4 ${hasMatch ? 'border-green-200 bg-green-50' : 'border-gray-200'}`}>
-                    <div className="mb-2">
-                      <span className="font-semibold">ID:</span> {row.ID || row.id || idx + 1}
-                    </div>
-                    <div className="mb-3 text-gray-700">
-                      <span className="font-semibold">Statement:</span> {row[statementCol]}
-                    </div>
-                    <div className="space-y-1">
-                      {Object.entries(row.classification).map(([tactic, result]) => (
-                        <div key={tactic} className="text-sm">
-                          {result.present ? (
-                            <span className="text-green-700">
-                              ✓ {tactic}: {result.matches.join(', ')}
-                            </span>
-                          ) : (
-                            <span className="text-gray-500">
-                              ✗ {tactic}: No matches
-                            </span>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
+# Footer
+st.markdown("---")
+st.markdown("Built with Streamlit • Marketing Tactic Classifier v1.0")
